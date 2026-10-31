@@ -171,10 +171,11 @@ async function login() {
   }
 }
 
-// ================= SIGNAL MESSAGE BUILDER =================
+// ================= PURE DYNAMIC SIGNAL PARSER =================
 function buildSignalMessage(signal) {
-  const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();
+  const symbol = (signal.symbol || signal.pair || 'UNKNOWN').toUpperCase();
   
+  // Asset Name
   let assetName = signal.asset_name || signal.name;
   if (!assetName) {
     if (symbol.includes('XAU')) assetName = 'Gold';
@@ -184,69 +185,95 @@ function buildSignalMessage(signal) {
     else assetName = symbol;
   }
 
-  const rawSignalTime = signal.created_at || signal.time || signal.timestamp;
+  const rawSignalTime = signal.created_at || signal.time || signal.timestamp || signal.signal_time;
   const signalTimeIST = formatToIST(rawSignalTime);
 
-  const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
-  const directionEmoji = direction.includes('BUY') ? '🟢 BUY' : '🔴 SELL';
-  const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';
-  const confidenceLevel = signal.confidence_level || signal.level || 'Medium';
+  // Direction Parsing
+  const rawDirection = String(signal.direction || signal.type || signal.action || signal.signal || '').toUpperCase();
+  const isBuy = rawDirection.includes('BUY') || rawDirection.includes('LONG') || rawDirection.includes('BULL');
+  const isSell = rawDirection.includes('SELL') || rawDirection.includes('SHORT') || rawDirection.includes('BEAR');
+  const directionEmoji = isBuy ? '🟢 BUY' : (isSell ? '🔴 SELL' : rawDirection || 'HOLD');
 
-  const entryZone = signal.entry_zone || `${signal.entry_low || signal.entry_price || ''} – ${signal.entry_high || ''}`;
-  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || signal.entry_price || '';
-  const sl = signal.sl || signal.stop_loss || '';
-  const tp1 = signal.tp1 || signal.tp || '';
-  const tp2 = signal.tp2 || '';
-  const tp3 = signal.tp3 || '';
-  const tp4 = signal.tp4 || '';
+  // Dynamic Confidence Score & Level Parsing (No hardcoding)
+  let rawScore = signal.confidence_score ?? signal.confidence ?? signal.score ?? signal.accuracy ?? signal.probability;
+  if (typeof rawScore === 'string') {
+    rawScore = parseFloat(rawScore.replace('%', ''));
+  }
+  const confidenceScore = !isNaN(rawScore) && rawScore !== null ? `${rawScore}%` : 'N/A';
 
-  let bullishVotes = 0;
-  let bearishVotes = 0;
+  // Dynamic Confidence Level from API or derived strictly from actual score
+  let confidenceLevel = signal.confidence_level || signal.level || signal.strength || signal.confidence_text;
+  if (!confidenceLevel && !isNaN(rawScore) && rawScore !== null) {
+    if (rawScore >= 80) confidenceLevel = 'High';
+    else if (rawScore >= 60) confidenceLevel = 'Medium';
+    else confidenceLevel = 'Low';
+  } else if (!confidenceLevel) {
+    confidenceLevel = 'N/A';
+  }
+
+  // Price Levels (Pure API keys)
+  let entryZone = signal.entry_zone;
+  if (!entryZone) {
+    const low = signal.entry_low ?? signal.entry_min ?? signal.entry_zone_low;
+    const high = signal.entry_high ?? signal.entry_max ?? signal.entry_zone_high;
+    if (low !== undefined && high !== undefined) {
+      entryZone = `${low} – ${high}`;
+    } else {
+      entryZone = signal.entry_price ?? signal.entry_mid ?? signal.entry ?? 'N/A';
+    }
+  }
+
+  const entryMid = signal.entry_mid ?? signal.entryMid ?? signal.entry_price ?? signal.entry ?? 'N/A';
+  const sl = signal.sl ?? signal.stop_loss ?? signal.stoploss ?? 'N/A';
+  
+  // Dynamic Targets
+  const tp1 = signal.tp1 ?? signal.tp ?? signal.target1 ?? 'N/A';
+  const tp2 = signal.tp2 ?? signal.target2 ?? 'N/A';
+  const tp3 = signal.tp3 ?? signal.target3 ?? 'N/A';
+  const tp4 = signal.tp4 ?? signal.target4 ?? 'N/A';
+
+  // Dynamic Strategy Votes Extraction
+  let bullishVotes = null;
+  let bearishVotes = null;
 
   const voteSource = signal.strategy_votes || signal.votes || signal.strategies || signal.analysis || signal.voting || {};
 
   if (typeof voteSource === 'object' && !Array.isArray(voteSource)) {
-    bullishVotes = voteSource.bullish ?? voteSource.buy ?? voteSource.bullish_count ?? voteSource.bullish_votes ?? 0;
-    bearishVotes = voteSource.bearish ?? voteSource.sell ?? voteSource.bearish_count ?? voteSource.bearish_votes ?? 0;
+    bullishVotes = voteSource.bullish ?? voteSource.buy ?? voteSource.bullish_count ?? voteSource.bullish_votes;
+    bearishVotes = voteSource.bearish ?? voteSource.sell ?? voteSource.bearish_count ?? voteSource.bearish_votes;
   }
 
-  if (bullishVotes === 0 && bearishVotes === 0) {
+  if (bullishVotes === null || bearishVotes === null) {
     bullishVotes = signal.bullish_votes ?? signal.bullish_count ?? signal.bullish ?? signal.buy_votes ?? 
-                   signal.strategies_bullish ?? signal.bullish_strategies ?? signal.bull_count ?? 0;
+                   signal.strategies_bullish ?? signal.bullish_strategies ?? signal.bull_count;
     bearishVotes = signal.bearish_votes ?? signal.bearish_count ?? signal.bearish ?? signal.sell_votes ?? 
-                   signal.strategies_bearish ?? signal.bearish_strategies ?? signal.bear_count ?? 0;
+                   signal.strategies_bearish ?? signal.bearish_strategies ?? signal.bear_count;
   }
 
-  if (bullishVotes === 0 && bearishVotes === 0 && Array.isArray(signal.strategies)) {
-    bullishVotes = signal.strategies.filter(s => (s.action || s.type || s.vote || '').toLowerCase().includes('buy') || (s.action || s.type || s.vote || '').toLowerCase().includes('bull')).length;
-    bearishVotes = signal.strategies.filter(s => (s.action || s.type || s.vote || '').toLowerCase().includes('sell') || (s.action || s.type || s.vote || '').toLowerCase().includes('bear')).length;
+  if ((bullishVotes === null || bearishVotes === null) && Array.isArray(signal.strategies)) {
+    bullishVotes = signal.strategies.filter(s => {
+      const v = String(s.action || s.type || s.vote || '').toLowerCase();
+      return v.includes('buy') || v.includes('bull');
+    }).length;
+    bearishVotes = signal.strategies.filter(s => {
+      const v = String(s.action || s.type || s.vote || '').toLowerCase();
+      return v.includes('sell') || v.includes('bear');
+    }).length;
   }
 
-  if (bullishVotes === 0 && bearishVotes === 0) {
-    const score = parseInt(confidenceScore) || 80;
-    const totalVotes = 8;
-    const winningVotes = Math.max(5, Math.min(8, Math.round((score / 100) * totalVotes)));
-    const losingVotes = Math.max(1, totalVotes - winningVotes);
+  const finalBullish = bullishVotes !== null && bullishVotes !== undefined ? bullishVotes : '0';
+  const finalBearish = bearishVotes !== null && bearishVotes !== undefined ? bearishVotes : '0';
 
-    if (direction.includes('BUY')) {
-      bullishVotes = winningVotes;
-      bearishVotes = losingVotes;
-    } else {
-      bullishVotes = losingVotes;
-      bearishVotes = winningVotes;
-    }
-  }
-
+  // AI Reasoning Parsing
   let aiReasoning = '';
-  if (Array.isArray(signal.reasoning)) {
+  if (Array.isArray(signal.reasoning) && signal.reasoning.length > 0) {
     aiReasoning = signal.reasoning.map(r => `• ${r}`).join('\n');
   } else if (typeof signal.reasoning === 'string' && signal.reasoning.trim().length > 0) {
-    aiReasoning = `• ${signal.reasoning}`;
+    aiReasoning = `• ${signal.reasoning.trim()}`;
+  } else if (signal.analysis && typeof signal.analysis === 'string') {
+    aiReasoning = `• ${signal.analysis.trim()}`;
   } else {
-    aiReasoning = 
-      `• Momentum confirmation on ${symbol} from live market session\n` +
-      `• Market structure supports ${direction} with ${confidenceScore}% confidence\n` +
-      `• Risk-reward verified by AI system`;
+    aiReasoning = `• Technical indicators and market momentum calculated by AI system for ${symbol}`;
   }
 
   const istCurrentTime = getIndianDateTime();
@@ -258,7 +285,7 @@ function buildSignalMessage(signal) {
 
 📊 <b>SIGNAL OVERVIEW</b>
 🎯 <b>Direction:</b> <b>${directionEmoji}</b>
-🔥 <b>Confidence:</b> <b>${confidenceScore}% (${confidenceLevel})</b>
+🔥 <b>Confidence:</b> <b>${confidenceScore} (${confidenceLevel})</b>
 
 🎯 <b>PRICE LEVELS</b>
 ▫️ <b>Entry Zone:</b> <code>${entryZone}</code>
@@ -270,7 +297,7 @@ function buildSignalMessage(signal) {
 🎯 <b>TP4:</b>        <code>${tp4}</code>
 
 📊 <b>STRATEGY VOTES</b>
-🟢 <b>Bullish:</b> ${bullishVotes}  |  🔴 <b>Bearish:</b> ${bearishVotes}
+🟢 <b>Bullish:</b> ${finalBullish}  |  🔴 <b>Bearish:</b> ${finalBearish}
 
 ⚡ <b>AI REASONING</b>
 ${aiReasoning}
@@ -279,7 +306,7 @@ ${aiReasoning}
 👤 <b>Support:</b> ${CONFIG.ADMIN_HANDLE}`;
 }
 
-// Fetch Latest Signals Helper
+// Fetch Helper
 async function fetchLatestSignals() {
   if (!authHeaders['Authorization']) {
     await login();
@@ -339,7 +366,7 @@ bot.onText(/\/start/, async (msg) => {
     reply_markup: generatePairKeyboard(chatId)
   }).catch(err => console.error('[WELCOME ERROR]', err.message));
 
-  // 2. Fetch Latest Signal & Send Immediately on /start
+  // 2. Fetch Latest Signal & Send on /start
   try {
     const signals = await fetchLatestSignals();
     if (signals && signals.length > 0) {
@@ -347,7 +374,7 @@ bot.onText(/\/start/, async (msg) => {
       const message = buildSignalMessage(latestSignal);
       await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
 
-      // 3. Send Connection confirmation message right after the latest signal
+      // 3. Send Connection confirmation message
       const istTime = getIndianDateTime();
       const notifyText = 
         `✅ <b>Connection successfully established!</b>\n\n` +
@@ -532,7 +559,7 @@ async function checkNewSignals(isRetry = false) {
       return;
     }
 
-    // Only broadcast brand new live signals
+    // Only broadcast real-time incoming signals
     for (const sig of signals) {
       const sym = (sig.symbol || sig.pair || '').toUpperCase();
       if (!AVAILABLE_PAIRS.includes(sym)) continue;
