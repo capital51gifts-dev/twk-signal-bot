@@ -10,10 +10,9 @@ const CONFIG = {
   ADMIN_CHAT_ID: 6224393090,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE',
   
-  // Direct endpoints to avoid environment variable caching issues
   LOGIN_URL: 'https://tws-forex-backend.vercel.app/api/login',
-  ALERTS_URL: 'https://ai-v2.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
-  API_KEY: '90104689',
+  ALERTS_URL: 'https://ai-bot.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
+  API_KEY: '99104689', // Exact API Key from your browser cURL
   
   CREDENTIALS: {
     email: process.env.SANCHIT_EMAIL || 'capital51gifts@gmail.com',
@@ -271,16 +270,22 @@ async function login() {
 
     const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
 
+    // Exact headers verified from browser cURL
     authHeaders = {
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'en-US,en;q=0.9',
+      'Connection': 'keep-alive',
       'Origin': 'https://automate.tradewithsanchit.com',
       'Referer': 'https://automate.tradewithsanchit.com/',
       'Sec-Fetch-Dest': 'empty',
       'Sec-Fetch-Mode': 'cors',
       'Sec-Fetch-Site': 'same-site',
-      'X-Api-Key': CONFIG.API_KEY,
+      'Sec-GPC': '1',
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+      'sec-ch-ua': '"Not:A-Brand";v="8", "Chromium";v="156", "Brave";v="156"',
+      'sec-ch-ua-mobile': '?1',
+      'sec-ch-ua-platform': '"iOS"',
+      'x-api-key': CONFIG.API_KEY,
       ...(token && { 'Authorization': `Bearer ${token}` })
     };
 
