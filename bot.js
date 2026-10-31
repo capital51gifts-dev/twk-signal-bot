@@ -56,7 +56,7 @@ function saveDatabase() {
 
 loadDatabase();
 
-// Auto-register Admin with all pairs enabled by default
+// Admin ko automatically database me pair permissions ke sath save karein
 const adminIdStr = String(CONFIG.ADMIN_CHAT_ID);
 if (!db.users[adminIdStr]) {
   db.users[adminIdStr] = {
@@ -77,11 +77,33 @@ const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, {
 });
 
 let authHeaders = {};
-// Track processed signals per-symbol so all pairs trigger independently
+// Har pair ka latest processed key track karne ke liye
 let processedSignalKeys = {};
 let isChecking = false;
 let isLoggingIn = false;
-let isConnectionNotified = false;
+let isInitialTestDone = false;
+
+// Indian Time Formatter helper
+function formatToIST(dateString) {
+  try {
+    const dateObj = dateString ? new Date(dateString) : new Date();
+    if (isNaN(dateObj.getTime())) {
+      return getIndianDateTime();
+    }
+    return new Intl.DateTimeFormat('en-IN', {
+      timeZone: 'Asia/Kolkata',
+      day: '2-digit',
+      month: '2-digit',
+      year: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: true
+    }).format(dateObj);
+  } catch (e) {
+    return getIndianDateTime();
+  }
+}
 
 function getIndianDateTime() {
   return new Intl.DateTimeFormat('en-IN', {
@@ -334,7 +356,9 @@ async function broadcastTelegramAlert(signal) {
     else assetName = symbol;
   }
 
-  const signalTime = signal.created_at || signal.time || 'Live Signal';
+  // Signal time converted from UTC to Indian Time (IST)
+  const rawSignalTime = signal.created_at || signal.time || signal.timestamp;
+  const signalTimeIST = formatToIST(rawSignalTime);
 
   const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
   const directionEmoji = direction.includes('BUY') ? '🟢 BUY' : '🔴 SELL';
@@ -370,7 +394,7 @@ async function broadcastTelegramAlert(signal) {
 `🚨 <b>${CONFIG.BRAND_NAME.toUpperCase()} AI SIGNAL</b> 🚨
 
 🪙 <b>Asset:</b> <code>${symbol}</code> (${assetName})
-⏱ <b>Signal Time:</b> <code>${signalTime}</code>
+⏱ <b>Signal Time (IST):</b> <code>${signalTimeIST}</code>
 
 📊 <b>SIGNAL OVERVIEW</b>
 🎯 <b>Direction:</b> <b>${directionEmoji}</b>
@@ -409,7 +433,7 @@ ${aiReasoning}
   console.log(`[SENT] ${symbol} signal dispatched successfully at IST: ${istCurrentTime}`);
 }
 
-// ================= POLLING & MULTI-PAIR RECOVERY =================
+// ================= POLLING CONTROLLER =================
 async function checkNewSignals(isRetry = false) {
   if (isChecking && !isRetry) return;
   isChecking = true;
@@ -437,22 +461,30 @@ async function checkNewSignals(isRetry = false) {
       return;
     }
 
-    // Process all pairs present in the incoming signals batch
-    for (const sig of signals) {
-      const sym = (sig.symbol || sig.pair || '').toUpperCase();
-      if (!AVAILABLE_PAIRS.includes(sym)) continue;
+    // Step 1: FIRST RUN ONLY (Test connection with single latest signal & lock baseline)
+    if (!isInitialTestDone) {
+      // Find the absolute latest single signal in the batch
+      const topLatestSignal = signals[0];
+      const topSymbol = (topLatestSignal.symbol || topLatestSignal.pair || '').toUpperCase();
+      const topKey = topLatestSignal._id || topLatestSignal.id || `${topSymbol}_${topLatestSignal.created_at || topLatestSignal.entry_mid || topLatestSignal.entry_price || topLatestSignal.entry}`;
 
-      const sigKey = sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`;
-
-      if (processedSignalKeys[sym] !== sigKey) {
-        processedSignalKeys[sym] = sigKey;
-        await broadcastTelegramAlert(sig);
-        console.log(`[SIGNAL PROCESSED] Dispatched ${sym} ID: ${sigKey}`);
+      // 1. Send ONLY this latest signal as startup test
+      if (AVAILABLE_PAIRS.includes(topSymbol)) {
+        await broadcastTelegramAlert(topLatestSignal);
+        processedSignalKeys[topSymbol] = topKey;
+        console.log(`[INITIAL TEST] Single latest signal sent: ${topSymbol}`);
       }
-    }
 
-    // Trigger Connection Confirmation message AFTER initial signal broadcast
-    if (!isConnectionNotified) {
+      // 2. Lock ALL other existing signals in database so they never repeat/spam
+      for (const sig of signals) {
+        const sym = (sig.symbol || sig.pair || '').toUpperCase();
+        if (AVAILABLE_PAIRS.includes(sym) && !processedSignalKeys[sym]) {
+          const sigKey = sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`;
+          processedSignalKeys[sym] = sigKey; // Baseline locked
+        }
+      }
+
+      // 3. Send Connection successfully established message AFTER the test signal
       const istTime = getIndianDateTime();
       const notifyText = 
         `✅ <b>Connection successfully established!</b>\n\n` +
@@ -460,13 +492,30 @@ async function checkNewSignals(isRetry = false) {
         `📊 <b>Monitored Pairs:</b> <code>${AVAILABLE_PAIRS.join(', ')}</code>\n` +
         `⏰ <b>Connected At (IST):</b> <code>${istTime}</code>`;
 
-      bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText, { parse_mode: 'HTML' })
-        .then(() => {
-          console.log('[TG NOTIFIED] Admin notified of successful connection!');
-          isConnectionNotified = true;
-        })
+      await bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText, { parse_mode: 'HTML' })
+        .then(() => console.log('[TG NOTIFIED] Admin notified of successful connection!'))
         .catch(err => console.error('[TG NOTIFY ERROR]', err.message));
+
+      isInitialTestDone = true;
+      isChecking = false;
+      return;
     }
+
+    // Step 2: LIVE MONITORING (Only send when a real NEW signal arrives)
+    for (const sig of signals) {
+      const sym = (sig.symbol || sig.pair || '').toUpperCase();
+      if (!AVAILABLE_PAIRS.includes(sym)) continue;
+
+      const sigKey = sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`;
+
+      // Agar key match nahi karti, matlab platform par naya signal aaya hai
+      if (processedSignalKeys[sym] !== sigKey) {
+        processedSignalKeys[sym] = sigKey;
+        await broadcastTelegramAlert(sig);
+        console.log(`[LIVE SIGNAL] New ${sym} signal dispatched: ${sigKey}`);
+      }
+    }
+
   } catch (err) {
     const status = err.response?.status;
     console.error(`[POLL ERROR] Status: ${status}`);
