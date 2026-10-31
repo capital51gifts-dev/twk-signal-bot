@@ -56,7 +56,25 @@ function saveDatabase() {
 
 loadDatabase();
 
-const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, { polling: true });
+// Ensure Admin Chat ID is automatically registered in DB with all pairs enabled
+const adminIdStr = String(CONFIG.ADMIN_CHAT_ID);
+if (!db.users[adminIdStr]) {
+  db.users[adminIdStr] = {
+    name: 'Admin',
+    pairs: [...AVAILABLE_PAIRS],
+    isBanned: false,
+    joinedAt: 'Auto-Registered'
+  };
+  saveDatabase();
+}
+
+const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, { 
+  polling: {
+    interval: 300,
+    autoStart: true,
+    params: { timeout: 10 }
+  }
+});
 
 let authHeaders = {};
 let lastProcessedSignalKey = null;
@@ -94,8 +112,7 @@ bot.onText(/\/start/, (msg) => {
   if (db.bannedUsers.includes(chatId) || db.users[chatId]?.isBanned) {
     return bot.sendMessage(
       chatId, 
-      `🚫 *Access Denied!*\n\nAapko is bot se ban kiya gaya hai.\nSupport & Unban ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`,
-      { parse_mode: 'Markdown' }
+      `🚫 Access Denied!\n\nAapko is bot se ban kiya gaya hai.\nSupport & Unban ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`
     );
   }
 
@@ -105,8 +122,7 @@ bot.onText(/\/start/, (msg) => {
     if (activeUserCount >= db.maxUsers && chatId !== String(CONFIG.ADMIN_CHAT_ID)) {
       return bot.sendMessage(
         chatId, 
-        `⚠️ *Slot Full!*\n\nBot me maximum user limit (${db.maxUsers}) reach ho chuki hai.\nNaye slots open hone par try karein ya Admin se access ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`,
-        { parse_mode: 'Markdown' }
+        `⚠️ Slot Full!\n\nBot me maximum user limit (${db.maxUsers}) reach ho chuki hai.\nNaye slots open hone par try karein ya Admin se access ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`
       );
     }
 
@@ -119,13 +135,12 @@ bot.onText(/\/start/, (msg) => {
     saveDatabase();
 
     bot.sendMessage(CONFIG.ADMIN_CHAT_ID, 
-      `👤 *New User Registered!*\nName: ${userName}\nChat ID: \`${chatId}\`\nTotal Active: ${activeUserCount + 1}/${db.maxUsers}`, 
-      { parse_mode: 'Markdown' }
-    );
+      `👤 New User Registered!\nName: ${userName}\nChat ID: ${chatId}\nTotal Active: ${activeUserCount + 1}/${db.maxUsers}`
+    ).catch(err => console.error('[ADMIN MSG ERROR]', err.message));
   }
 
   const welcomeText = 
-`👋 *Welcome ${userName}!*
+`👋 Welcome ${userName}!
 
 *${CONFIG.BRAND_NAME}* AI Signal Bot me aapka swagat hai.
 
@@ -134,7 +149,7 @@ Neeche diye gaye buttons par tap karke select karein ki aapko kin-kin pairs ke a
   bot.sendMessage(chatId, welcomeText, {
     parse_mode: 'Markdown',
     reply_markup: generatePairKeyboard(chatId)
-  });
+  }).catch(err => console.error('[WELCOME ERROR]', err.message));
 });
 
 // ================= BUTTONS TOGGLE =================
@@ -165,7 +180,7 @@ bot.on('callback_query', async (query) => {
     await bot.editMessageReplyMarkup(generatePairKeyboard(chatId), {
       chat_id: chatId,
       message_id: messageId
-    });
+    }).catch(e => console.error('[KEYBOARD EDIT ERROR]', e.message));
 
     await bot.answerCallbackQuery(query.id, {
       text: `${pair} ${userPairs.includes(pair) ? 'Enabled ✅' : 'Disabled ❌'}`
@@ -194,7 +209,7 @@ bot.onText(/\/stats/, (msg) => {
     `• \`/unban <chat_id>\`\n` +
     `• \`/users\``,
     { parse_mode: 'Markdown' }
-  );
+  ).catch(e => console.error('[STATS ERROR]', e.message));
 });
 
 bot.onText(/\/setlimit (.+)/, (msg, match) => {
@@ -203,7 +218,7 @@ bot.onText(/\/setlimit (.+)/, (msg, match) => {
 
   const newLimit = parseInt(match[1]);
   if (isNaN(newLimit) || newLimit <= 0) {
-    return bot.sendMessage(chatId, '❌ Valid number daalein. Example: `/setlimit 50`');
+    return bot.sendMessage(chatId, '❌ Valid number daalein. Example: `/setlimit 50`', { parse_mode: 'Markdown' });
   }
 
   db.maxUsers = newLimit;
@@ -225,7 +240,7 @@ bot.onText(/\/ban (.+)/, (msg, match) => {
   saveDatabase();
 
   bot.sendMessage(chatId, `🚫 User \`${targetId}\` ko ban kar diya gaya hai.`, { parse_mode: 'Markdown' });
-  bot.sendMessage(targetId, `🚫 *Notification:* Aapko ban kiya gaya hai. Contact: ${CONFIG.ADMIN_HANDLE}`);
+  bot.sendMessage(targetId, `🚫 Notification: Aapko ban kiya gaya hai. Contact: ${CONFIG.ADMIN_HANDLE}`).catch(() => {});
 });
 
 bot.onText(/\/unban (.+)/, (msg, match) => {
@@ -240,20 +255,20 @@ bot.onText(/\/unban (.+)/, (msg, match) => {
   saveDatabase();
 
   bot.sendMessage(chatId, `✅ User \`${targetId}\` unban ho gaya hai.`, { parse_mode: 'Markdown' });
-  bot.sendMessage(targetId, `✅ *Notification:* Aapka access activate ho gaya hai. Dobara /start karein.`);
+  bot.sendMessage(targetId, `✅ Notification: Aapka access activate ho gaya hai. Dobara /start karein.`).catch(() => {});
 });
 
 bot.onText(/\/users/, (msg) => {
   const chatId = String(msg.chat.id);
   if (chatId !== String(CONFIG.ADMIN_CHAT_ID)) return;
 
-  let listText = `📋 *Registered Users List:*\n\n`;
+  let listText = `📋 Registered Users List:\n\n`;
   for (const [id, user] of Object.entries(db.users)) {
     const status = db.bannedUsers.includes(id) ? '🚫 Banned' : '✅ Active';
-    listText += `• ${user.name} (\`${id}\`) - ${status}\n`;
+    listText += `• ${user.name} (${id}) - ${status}\n`;
   }
 
-  bot.sendMessage(chatId, listText, { parse_mode: 'Markdown' });
+  bot.sendMessage(chatId, listText);
 });
 
 // ================= AUTO LOGIN / SESSION RENEW =================
@@ -411,26 +426,37 @@ async function checkNewSignals(isRetry = false) {
     const signalKey = latest._id || latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry_price || latest.entry}`;
 
     if (signalKey !== lastProcessedSignalKey) {
-      if (lastProcessedSignalKey !== null) {
-        await broadcastTelegramAlert(latest);
-      } else {
-        console.log(`[INITIALIZED] Baseline active: ${signalKey}`);
-        
-        // Connection successfully established alert to Admin
-        if (!isConnectionNotified) {
-          const istTime = getIndianDateTime();
-          bot.sendMessage(
-            CONFIG.ADMIN_CHAT_ID,
-            `✅ *Connection successfully established!*\n\n` +
-            `🤖 *${CONFIG.BRAND_NAME}* AI Engine is active 24/7.\n` +
-            `📡 API Data Source: \`${CONFIG.ALERTS_URL}\`\n` +
-            `🎯 Baseline ID: \`${signalKey}\`\n` +
-            `⏰ Connected At (IST): \`${istTime}\``,
-            { parse_mode: 'Markdown' }
-          ).catch(e => console.error('[TG NOTIFY ERROR]', e.message));
-          isConnectionNotified = true;
-        }
+      // 1. Connection notification if not sent yet
+      if (!isConnectionNotified) {
+        const istTime = getIndianDateTime();
+        const notifyText = 
+          `✅ Connection successfully established!\n\n` +
+          `🤖 ${CONFIG.BRAND_NAME} AI Engine is active 24/7.\n` +
+          `📡 API Data Source: Connected\n` +
+          `🎯 Baseline ID: ${signalKey}\n` +
+          `⏰ Connected At (IST): ${istTime}`;
+
+        const sendConnectionAlert = (retries = 3) => {
+          bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText)
+            .then(() => {
+              console.log('[TG NOTIFIED] Admin notified of successful connection!');
+              isConnectionNotified = true;
+            })
+            .catch(err => {
+              console.error(`[TG NOTIFY RETRYING] Remaining: ${retries - 1} | Error: ${err.message}`);
+              if (retries > 0) {
+                setTimeout(() => sendConnectionAlert(retries - 1), 3000);
+              }
+            });
+        };
+
+        sendConnectionAlert();
       }
+
+      // 2. Dispatch latest signal immediately (both for baseline and new incoming signals)
+      await broadcastTelegramAlert(latest);
+      console.log(`[SIGNAL PROCESSED] Dispatched ID: ${signalKey}`);
+
       lastProcessedSignalKey = signalKey;
     }
   } catch (err) {
