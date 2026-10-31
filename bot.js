@@ -31,13 +31,17 @@ const DB_FILE = path.join(__dirname, 'database.json');
 let db = {
   maxUsers: 50,
   users: {},
-  bannedUsers: []
+  bannedUsers: [],
+  processedSignals: {}, // Saved persistently to disk
+  connectionNotified: false
 };
 
 function loadDatabase() {
   try {
     if (fs.existsSync(DB_FILE)) {
-      db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      const data = JSON.parse(fs.readFileSync(DB_FILE, 'utf8'));
+      db = { ...db, ...data };
+      if (!db.processedSignals) db.processedSignals = {};
     } else {
       saveDatabase();
     }
@@ -56,7 +60,7 @@ function saveDatabase() {
 
 loadDatabase();
 
-// Admin ko automatically database me pair permissions ke sath save karein
+// Ensure Admin is always enrolled
 const adminIdStr = String(CONFIG.ADMIN_CHAT_ID);
 if (!db.users[adminIdStr]) {
   db.users[adminIdStr] = {
@@ -77,11 +81,8 @@ const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, {
 });
 
 let authHeaders = {};
-// Har pair ka latest processed key track karne ke liye
-let processedSignalKeys = {};
 let isChecking = false;
 let isLoggingIn = false;
-let isInitialTestDone = false;
 
 // Indian Time Formatter helper
 function formatToIST(dateString) {
@@ -356,7 +357,6 @@ async function broadcastTelegramAlert(signal) {
     else assetName = symbol;
   }
 
-  // Signal time converted from UTC to Indian Time (IST)
   const rawSignalTime = signal.created_at || signal.time || signal.timestamp;
   const signalTimeIST = formatToIST(rawSignalTime);
 
@@ -433,7 +433,7 @@ ${aiReasoning}
   console.log(`[SENT] ${symbol} signal dispatched successfully at IST: ${istCurrentTime}`);
 }
 
-// ================= POLLING CONTROLLER =================
+// ================= CONTROLLED POLLING =================
 async function checkNewSignals(isRetry = false) {
   if (isChecking && !isRetry) return;
   isChecking = true;
@@ -456,35 +456,30 @@ async function checkNewSignals(isRetry = false) {
       ? res.data 
       : (res.data.signals || res.data.data || res.data.history || []);
 
-    if (!signals.length) {
+    if (!signals || !signals.length) {
       isChecking = false;
       return;
     }
 
-    // Step 1: FIRST RUN ONLY (Test connection with single latest signal & lock baseline)
-    if (!isInitialTestDone) {
-      // Find the absolute latest single signal in the batch
+    // CASE 1: FIRST CONNECTION (Send exactly ONE single latest signal, then confirm connection)
+    if (!db.connectionNotified) {
       const topLatestSignal = signals[0];
       const topSymbol = (topLatestSignal.symbol || topLatestSignal.pair || '').toUpperCase();
-      const topKey = topLatestSignal._id || topLatestSignal.id || `${topSymbol}_${topLatestSignal.created_at || topLatestSignal.entry_mid || topLatestSignal.entry_price || topLatestSignal.entry}`;
+      const topKey = String(topLatestSignal._id || topLatestSignal.id || `${topSymbol}_${topLatestSignal.created_at || topLatestSignal.entry_mid || topLatestSignal.entry_price || topLatestSignal.entry}`);
 
-      // 1. Send ONLY this latest signal as startup test
+      // 1. Send test signal
       if (AVAILABLE_PAIRS.includes(topSymbol)) {
         await broadcastTelegramAlert(topLatestSignal);
-        processedSignalKeys[topSymbol] = topKey;
-        console.log(`[INITIAL TEST] Single latest signal sent: ${topSymbol}`);
+        db.processedSignals[topKey] = true;
       }
 
-      // 2. Lock ALL other existing signals in database so they never repeat/spam
+      // 2. Lock ALL other existing signals in database so they NEVER spam
       for (const sig of signals) {
-        const sym = (sig.symbol || sig.pair || '').toUpperCase();
-        if (AVAILABLE_PAIRS.includes(sym) && !processedSignalKeys[sym]) {
-          const sigKey = sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`;
-          processedSignalKeys[sym] = sigKey; // Baseline locked
-        }
+        const sKey = String(sig._id || sig.id || `${sig.symbol}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`);
+        db.processedSignals[sKey] = true;
       }
 
-      // 3. Send Connection successfully established message AFTER the test signal
+      // 3. Send Connection successfully established message
       const istTime = getIndianDateTime();
       const notifyText = 
         `✅ <b>Connection successfully established!</b>\n\n` +
@@ -496,21 +491,23 @@ async function checkNewSignals(isRetry = false) {
         .then(() => console.log('[TG NOTIFIED] Admin notified of successful connection!'))
         .catch(err => console.error('[TG NOTIFY ERROR]', err.message));
 
-      isInitialTestDone = true;
+      db.connectionNotified = true;
+      saveDatabase();
       isChecking = false;
       return;
     }
 
-    // Step 2: LIVE MONITORING (Only send when a real NEW signal arrives)
+    // CASE 2: LIVE MONITORING (Only triggers when a genuine brand-new signal arrives)
     for (const sig of signals) {
       const sym = (sig.symbol || sig.pair || '').toUpperCase();
       if (!AVAILABLE_PAIRS.includes(sym)) continue;
 
-      const sigKey = sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`;
+      const sigKey = String(sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`);
 
-      // Agar key match nahi karti, matlab platform par naya signal aaya hai
-      if (processedSignalKeys[sym] !== sigKey) {
-        processedSignalKeys[sym] = sigKey;
+      // Agar yeh signal pehle kabhi nahi gaya, sirf tabhi send hoga
+      if (!db.processedSignals[sigKey]) {
+        db.processedSignals[sigKey] = true;
+        saveDatabase();
         await broadcastTelegramAlert(sig);
         console.log(`[LIVE SIGNAL] New ${sym} signal dispatched: ${sigKey}`);
       }
