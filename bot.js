@@ -7,10 +7,9 @@ const path = require('path');
 const CONFIG = {
   BRAND_NAME: 'Trade With Krishna',
   ADMIN_HANDLE: '@TWK_AD',
-  ADMIN_CHAT_ID: 6224393090, // Aapki exact Admin Numeric ID
+  ADMIN_CHAT_ID: 6224393090,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE',
   
-  // Website API URLs
   LOGIN_URL: process.env.LOGIN_URL || 'https://automate.tradewithsanchit.com/api/login',
   ALERTS_URL: process.env.ALERTS_URL || 'https://automate.tradewithsanchit.com/api/signals',
   
@@ -19,11 +18,11 @@ const CONFIG = {
     password: process.env.SANCHIT_PASSWORD || 'your_password'
   },
   
-  POLL_INTERVAL_MS: 5000,             // Har 5 second me new signal check
-  RELOGIN_INTERVAL_MS: 25 * 60 * 1000 // Har 25 minute me preemptive login
+  POLL_INTERVAL_MS: 5000,
+  RELOGIN_INTERVAL_MS: 25 * 60 * 1000
 };
 
-const AVAILABLE_PAIRS = ['XAUUSD', 'XAGUSD', 'BTCUSD', 'ETHUSD'];[cite: 1]
+const AVAILABLE_PAIRS = ['XAUUSD', 'XAGUSD', 'BTCUSD', 'ETHUSD'];
 const DB_FILE = path.join(__dirname, 'database.json');
 // =================================================
 
@@ -62,7 +61,6 @@ let lastProcessedSignalKey = null;
 let isChecking = false;
 let isLoggingIn = false;
 
-// Indian Standard Time (IST) Formatter
 function getIndianDateTime() {
   return new Intl.DateTimeFormat('en-IN', {
     timeZone: 'Asia/Kolkata',
@@ -76,7 +74,6 @@ function getIndianDateTime() {
   }).format(new Date());
 }
 
-// Inline Keyboard Buttons Generator
 function generatePairKeyboard(chatId) {
   const userPairs = db.users[chatId]?.pairs || [];
   const inline_keyboard = AVAILABLE_PAIRS.map(pair => {
@@ -91,7 +88,6 @@ bot.onText(/\/start/, (msg) => {
   const chatId = String(msg.chat.id);
   const userName = msg.from.first_name || 'Trader';
 
-  // 1. Check agar user Banned hai
   if (db.bannedUsers.includes(chatId) || db.users[chatId]?.isBanned) {
     return bot.sendMessage(
       chatId, 
@@ -100,7 +96,6 @@ bot.onText(/\/start/, (msg) => {
     );
   }
 
-  // 2. Check agar User Limit exceed ho rahi hai
   const activeUserCount = Object.keys(db.users).filter(id => !db.users[id].isBanned).length;
 
   if (!db.users[chatId]) {
@@ -120,7 +115,6 @@ bot.onText(/\/start/, (msg) => {
     };
     saveDatabase();
 
-    // Admin ko alert message bhejega
     bot.sendMessage(CONFIG.ADMIN_CHAT_ID, 
       `👤 *New User Registered!*\nName: ${userName}\nChat ID: \`${chatId}\`\nTotal Active: ${activeUserCount + 1}/${db.maxUsers}`, 
       { parse_mode: 'Markdown' }
@@ -294,38 +288,34 @@ async function login() {
 
 // ================= BROADCAST SIGNALS =================
 async function broadcastTelegramAlert(signal) {
-  const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();[cite: 2]
-  const assetName = signal.asset_name || signal.name || 'Gold';[cite: 2]
+  const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();
+  const assetName = signal.asset_name || signal.name || 'Gold';
   const signalTime = signal.created_at || signal.time || 'Live Signal';
 
-  // Direction & Confidence[cite: 3]
-  const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();[cite: 3]
+  const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
   const directionEmoji = direction.includes('BUY') ? '🟢 BUY' : '🔴 SELL';
-  const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';[cite: 3]
-  const confidenceLevel = signal.confidence_level || signal.level || 'Medium';[cite: 3]
+  const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';
+  const confidenceLevel = signal.confidence_level || signal.level || 'Medium';
 
-  // Price Levels[cite: 2]
-  const entryZone = signal.entry_zone || `${signal.entry_low || '3,882'} – ${signal.entry_high || '3,882.6'}`;[cite: 2]
-  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || '3,882.3';[cite: 2]
-  const sl = signal.sl || signal.stop_loss || '3,892.3';[cite: 2]
-  const tp1 = signal.tp1 || signal.tp || '3,872.3';[cite: 2]
-  const tp2 = signal.tp2 || '3,857.3';[cite: 2]
-  const tp3 = signal.tp3 || '3,837.3';[cite: 2]
-  const tp4 = signal.tp4 || '3,812.3';[cite: 2]
+  const entryZone = signal.entry_zone || `${signal.entry_low || '3,882'} – ${signal.entry_high || '3,882.6'}`;
+  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || '3,882.3';
+  const sl = signal.sl || signal.stop_loss || '3,892.3';
+  const tp1 = signal.tp1 || signal.tp || '3,872.3';
+  const tp2 = signal.tp2 || '3,857.3';
+  const tp3 = signal.tp3 || '3,837.3';
+  const tp4 = signal.tp4 || '3,812.3';
 
-  // Strategy Votes[cite: 2]
-  const bullishVotes = signal.bullish_votes ?? signal.bullish ?? 1;[cite: 2]
-  const bearishVotes = signal.bearish_votes ?? signal.bearish ?? 5;[cite: 2]
+  const bullishVotes = signal.bullish_votes ?? signal.bullish ?? 1;
+  const bearishVotes = signal.bearish_votes ?? signal.bearish ?? 5;
 
-  // AI Reasoning[cite: 2]
   let aiReasoning = '';
   if (Array.isArray(signal.reasoning)) {
     aiReasoning = signal.reasoning.map(r => `✅ ${r}`).join('\n');
   } else {
     aiReasoning = 
-      `✅ Selling pressure detected on ${symbol} from live MT5 data during New York session\n` +[cite: 2]
-      `✅ Market structure supports downside movement with 80% confidence\n` +[cite: 2]
-      `✅ 5/12 strategies confirmed - risk-reward ratio validated by AI system`;[cite: 2]
+      `✅ Selling pressure detected on ${symbol} from live MT5 data during New York session\n` +
+      `✅ Market structure supports downside movement with 80% confidence\n` +
+      `✅ 5/12 strategies confirmed - risk-reward ratio validated by AI system`;
   }
 
   const istCurrentTime = getIndianDateTime();
@@ -356,7 +346,7 @@ async function broadcastTelegramAlert(signal) {
 ${aiReasoning}
 
 🇮🇳 *Alert Received (IST):* \`${istCurrentTime}\`
-👤 *Support:* ${CONFIG.ADMIN_HANDLE}`;[cite: 2, 3]
+👤 *Support:* ${CONFIG.ADMIN_HANDLE}`;
 
   for (const [chatId, userData] of Object.entries(db.users)) {
     if (!userData.isBanned && !db.bannedUsers.includes(chatId)) {
@@ -399,7 +389,7 @@ async function checkNewSignals(isRetry = false) {
     }
 
     const latest = signals[0];
-    const signalKey = latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry}`;[cite: 2]
+    const signalKey = latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry}`;
 
     if (signalKey !== lastProcessedSignalKey) {
       if (lastProcessedSignalKey !== null) {
