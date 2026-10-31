@@ -10,8 +10,9 @@ const CONFIG = {
   ADMIN_CHAT_ID: 6224393090,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE',
   
-  LOGIN_URL: process.env.LOGIN_URL || 'https://tws-forex-backend.vercel.app/api/login',
-  ALERTS_URL: process.env.ALERTS_URL || 'https://ai-v2.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
+  // Direct endpoints to avoid environment variable caching issues
+  LOGIN_URL: 'https://tws-forex-backend.vercel.app/api/login',
+  ALERTS_URL: 'https://ai-v2.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
   API_KEY: '90104689',
   
   CREDENTIALS: {
@@ -413,6 +414,7 @@ async function checkNewSignals(isRetry = false) {
     }
   } catch (err) {
     const status = err.response?.status;
+    console.error(`[POLL ERROR] Status: ${status} | Target: ${CONFIG.ALERTS_URL}`);
     if (status === 401 || status === 403) {
       console.warn(`[DETECTED] Session logout (Status ${status}). Re-logging in...`);
       const success = await login();
@@ -420,8 +422,6 @@ async function checkNewSignals(isRetry = false) {
         isChecking = false;
         return await checkNewSignals(true);
       }
-    } else {
-      console.error('[POLL ERROR]', err.message);
     }
   } finally {
     isChecking = false;
