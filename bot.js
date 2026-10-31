@@ -32,8 +32,7 @@ let db = {
   maxUsers: 50,
   users: {},
   bannedUsers: [],
-  processedSignals: {},
-  connectionNotified: false
+  processedSignals: {}
 };
 
 function loadDatabase() {
@@ -128,8 +127,174 @@ function generatePairKeyboard(chatId) {
   return { inline_keyboard };
 }
 
+// ================= AUTO LOGIN / SESSION RENEW =================
+async function login() {
+  if (isLoggingIn) return;
+  isLoggingIn = true;
+
+  try {
+    const res = await axios.post(CONFIG.LOGIN_URL, CONFIG.CREDENTIALS, {
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1'
+      },
+      timeout: 10000
+    });
+
+    const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
+
+    authHeaders = {
+      'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
+      'Connection': 'keep-alive',
+      'Origin': 'https://automate.tradewithsanchit.com',
+      'Referer': 'https://automate.tradewithsanchit.com/',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-site',
+      'Sec-GPC': '1',
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
+      'sec-ch-ua': '"Not:A-Brand";v="8", "Chromium";v="156", "Brave";v="156"',
+      'sec-ch-ua-mobile': '?1',
+      'sec-ch-ua-platform': '"iOS"',
+      'x-api-key': CONFIG.API_KEY,
+      ...(token && { 'Authorization': `Bearer ${token}` })
+    };
+
+    console.log(`[AUTH] Session renewed! (${getIndianDateTime()})`);
+    return true;
+  } catch (err) {
+    console.error('[AUTH ERROR] Login fail:', err.response?.data || err.message);
+    return false;
+  } finally {
+    isLoggingIn = false;
+  }
+}
+
+// ================= SIGNAL MESSAGE BUILDER =================
+function buildSignalMessage(signal) {
+  const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();
+  
+  let assetName = signal.asset_name || signal.name;
+  if (!assetName) {
+    if (symbol.includes('XAU')) assetName = 'Gold';
+    else if (symbol.includes('XAG')) assetName = 'Silver';
+    else if (symbol.includes('BTC')) assetName = 'Bitcoin';
+    else if (symbol.includes('ETH')) assetName = 'Ethereum';
+    else assetName = symbol;
+  }
+
+  const rawSignalTime = signal.created_at || signal.time || signal.timestamp;
+  const signalTimeIST = formatToIST(rawSignalTime);
+
+  const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
+  const directionEmoji = direction.includes('BUY') ? '🟢 BUY' : '🔴 SELL';
+  const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';
+  const confidenceLevel = signal.confidence_level || signal.level || 'Medium';
+
+  const entryZone = signal.entry_zone || `${signal.entry_low || signal.entry_price || ''} – ${signal.entry_high || ''}`;
+  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || signal.entry_price || '';
+  const sl = signal.sl || signal.stop_loss || '';
+  const tp1 = signal.tp1 || signal.tp || '';
+  const tp2 = signal.tp2 || '';
+  const tp3 = signal.tp3 || '';
+  const tp4 = signal.tp4 || '';
+
+  let bullishVotes = 0;
+  let bearishVotes = 0;
+
+  const voteSource = signal.strategy_votes || signal.votes || signal.strategies || signal.analysis || signal.voting || {};
+
+  if (typeof voteSource === 'object' && !Array.isArray(voteSource)) {
+    bullishVotes = voteSource.bullish ?? voteSource.buy ?? voteSource.bullish_count ?? voteSource.bullish_votes ?? 0;
+    bearishVotes = voteSource.bearish ?? voteSource.sell ?? voteSource.bearish_count ?? voteSource.bearish_votes ?? 0;
+  }
+
+  if (bullishVotes === 0 && bearishVotes === 0) {
+    bullishVotes = signal.bullish_votes ?? signal.bullish_count ?? signal.bullish ?? signal.buy_votes ?? 
+                   signal.strategies_bullish ?? signal.bullish_strategies ?? signal.bull_count ?? 0;
+    bearishVotes = signal.bearish_votes ?? signal.bearish_count ?? signal.bearish ?? signal.sell_votes ?? 
+                   signal.strategies_bearish ?? signal.bearish_strategies ?? signal.bear_count ?? 0;
+  }
+
+  if (bullishVotes === 0 && bearishVotes === 0 && Array.isArray(signal.strategies)) {
+    bullishVotes = signal.strategies.filter(s => (s.action || s.type || s.vote || '').toLowerCase().includes('buy') || (s.action || s.type || s.vote || '').toLowerCase().includes('bull')).length;
+    bearishVotes = signal.strategies.filter(s => (s.action || s.type || s.vote || '').toLowerCase().includes('sell') || (s.action || s.type || s.vote || '').toLowerCase().includes('bear')).length;
+  }
+
+  if (bullishVotes === 0 && bearishVotes === 0) {
+    const score = parseInt(confidenceScore) || 80;
+    const totalVotes = 8;
+    const winningVotes = Math.max(5, Math.min(8, Math.round((score / 100) * totalVotes)));
+    const losingVotes = Math.max(1, totalVotes - winningVotes);
+
+    if (direction.includes('BUY')) {
+      bullishVotes = winningVotes;
+      bearishVotes = losingVotes;
+    } else {
+      bullishVotes = losingVotes;
+      bearishVotes = winningVotes;
+    }
+  }
+
+  let aiReasoning = '';
+  if (Array.isArray(signal.reasoning)) {
+    aiReasoning = signal.reasoning.map(r => `• ${r}`).join('\n');
+  } else if (typeof signal.reasoning === 'string' && signal.reasoning.trim().length > 0) {
+    aiReasoning = `• ${signal.reasoning}`;
+  } else {
+    aiReasoning = 
+      `• Momentum confirmation on ${symbol} from live market session\n` +
+      `• Market structure supports ${direction} with ${confidenceScore}% confidence\n` +
+      `• Risk-reward verified by AI system`;
+  }
+
+  const istCurrentTime = getIndianDateTime();
+
+  return `🚨 <b>${CONFIG.BRAND_NAME.toUpperCase()} AI SIGNAL</b> 🚨
+
+🪙 <b>Asset:</b> <code>${symbol}</code> (${assetName})
+⏱ <b>Signal Time (IST):</b> <code>${signalTimeIST}</code>
+
+📊 <b>SIGNAL OVERVIEW</b>
+🎯 <b>Direction:</b> <b>${directionEmoji}</b>
+🔥 <b>Confidence:</b> <b>${confidenceScore}% (${confidenceLevel})</b>
+
+🎯 <b>PRICE LEVELS</b>
+▫️ <b>Entry Zone:</b> <code>${entryZone}</code>
+▫️ <b>Entry Mid:</b>  <code>${entryMid}</code>
+🛑 <b>Stop Loss:</b>  <code>${sl}</code>
+🎯 <b>TP1:</b>        <code>${tp1}</code>
+🎯 <b>TP2:</b>        <code>${tp2}</code>
+🎯 <b>TP3:</b>        <code>${tp3}</code>
+🎯 <b>TP4:</b>        <code>${tp4}</code>
+
+📊 <b>STRATEGY VOTES</b>
+🟢 <b>Bullish:</b> ${bullishVotes}  |  🔴 <b>Bearish:</b> ${bearishVotes}
+
+⚡ <b>AI REASONING</b>
+${aiReasoning}
+
+🇮🇳 <b>Alert Received (IST):</b> <code>${istCurrentTime}</code>
+👤 <b>Support:</b> ${CONFIG.ADMIN_HANDLE}`;
+}
+
+// Fetch Latest Signals Helper
+async function fetchLatestSignals() {
+  if (!authHeaders['Authorization']) {
+    await login();
+  }
+  const res = await axios.get(CONFIG.ALERTS_URL, { 
+    headers: authHeaders,
+    timeout: 8000 
+  });
+  return Array.isArray(res.data) 
+    ? res.data 
+    : (res.data.signals || res.data.data || res.data.history || []);
+}
+
 // ================= USER ACCESS & START =================
-bot.onText(/\/start/, (msg) => {
+bot.onText(/\/start/, async (msg) => {
   const chatId = String(msg.chat.id);
   const userName = msg.from.first_name || 'Trader';
 
@@ -163,15 +328,38 @@ bot.onText(/\/start/, (msg) => {
     ).catch(err => console.error('[ADMIN MSG ERROR]', err.message));
   }
 
+  // 1. Send Welcome Message with Pair Selection
   const welcomeText = 
 `👋 <b>Welcome ${userName}!</b>\n\n` +
 `<b>${CONFIG.BRAND_NAME}</b> AI Signal Bot me aapka swagat hai.\n\n` +
 `Neeche diye gaye buttons par tap karke select karein ki aapko kin-kin pairs ke alerts chahiye:`;
 
-  bot.sendMessage(chatId, welcomeText, {
+  await bot.sendMessage(chatId, welcomeText, {
     parse_mode: 'HTML',
     reply_markup: generatePairKeyboard(chatId)
   }).catch(err => console.error('[WELCOME ERROR]', err.message));
+
+  // 2. Fetch Latest Signal & Send Immediately on /start
+  try {
+    const signals = await fetchLatestSignals();
+    if (signals && signals.length > 0) {
+      const latestSignal = signals[0];
+      const message = buildSignalMessage(latestSignal);
+      await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
+
+      // 3. Send Connection confirmation message right after the latest signal
+      const istTime = getIndianDateTime();
+      const notifyText = 
+        `✅ <b>Connection successfully established!</b>\n\n` +
+        `🤖 <b>${CONFIG.BRAND_NAME}</b> AI Engine is active 24/7.\n` +
+        `📊 <b>Monitored Pairs:</b> <code>${AVAILABLE_PAIRS.join(', ')}</code>\n` +
+        `⏰ <b>Connected At (IST):</b> <code>${istTime}</code>`;
+
+      await bot.sendMessage(chatId, notifyText, { parse_mode: 'HTML' });
+    }
+  } catch (err) {
+    console.error('[START SIGNAL FETCH ERROR]:', err.message);
+  }
 });
 
 // ================= BUTTONS TOGGLE =================
@@ -300,159 +488,10 @@ bot.onText(/\/users/, (msg) => {
   bot.sendMessage(chatId, listText);
 });
 
-// ================= AUTO LOGIN / SESSION RENEW =================
-async function login() {
-  if (isLoggingIn) return;
-  isLoggingIn = true;
-
-  try {
-    const res = await axios.post(CONFIG.LOGIN_URL, CONFIG.CREDENTIALS, {
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1'
-      },
-      timeout: 10000
-    });
-
-    const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
-
-    authHeaders = {
-      'Accept': 'application/json, text/plain, */*',
-      'Accept-Language': 'en-US,en;q=0.9',
-      'Connection': 'keep-alive',
-      'Origin': 'https://automate.tradewithsanchit.com',
-      'Referer': 'https://automate.tradewithsanchit.com/',
-      'Sec-Fetch-Dest': 'empty',
-      'Sec-Fetch-Mode': 'cors',
-      'Sec-Fetch-Site': 'same-site',
-      'Sec-GPC': '1',
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
-      'sec-ch-ua': '"Not:A-Brand";v="8", "Chromium";v="156", "Brave";v="156"',
-      'sec-ch-ua-mobile': '?1',
-      'sec-ch-ua-platform': '"iOS"',
-      'x-api-key': CONFIG.API_KEY,
-      ...(token && { 'Authorization': `Bearer ${token}` })
-    };
-
-    console.log(`[AUTH] Session renewed! (${getIndianDateTime()})`);
-    return true;
-  } catch (err) {
-    console.error('[AUTH ERROR] Login fail:', err.response?.data || err.message);
-    return false;
-  } finally {
-    isLoggingIn = false;
-  }
-}
-
 // ================= BROADCAST SIGNALS =================
 async function broadcastTelegramAlert(signal) {
   const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();
-  
-  let assetName = signal.asset_name || signal.name;
-  if (!assetName) {
-    if (symbol.includes('XAU')) assetName = 'Gold';
-    else if (symbol.includes('XAG')) assetName = 'Silver';
-    else if (symbol.includes('BTC')) assetName = 'Bitcoin';
-    else if (symbol.includes('ETH')) assetName = 'Ethereum';
-    else assetName = symbol;
-  }
-
-  const rawSignalTime = signal.created_at || signal.time || signal.timestamp;
-  const signalTimeIST = formatToIST(rawSignalTime);
-
-  const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
-  const directionEmoji = direction.includes('BUY') ? '🟢 BUY' : '🔴 SELL';
-  const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';
-  const confidenceLevel = signal.confidence_level || signal.level || 'Medium';
-
-  const entryZone = signal.entry_zone || `${signal.entry_low || signal.entry_price || ''} – ${signal.entry_high || ''}`;
-  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || signal.entry_price || '';
-  const sl = signal.sl || signal.stop_loss || '';
-  const tp1 = signal.tp1 || signal.tp || '';
-  const tp2 = signal.tp2 || '';
-  const tp3 = signal.tp3 || '';
-  const tp4 = signal.tp4 || '';
-
-  // Dynamic Strategy Votes Extraction with full nested key support
-  let bullishVotes = 0;
-  let bearishVotes = 0;
-
-  const voteSource = signal.strategy_votes || signal.votes || signal.strategies || signal.analysis || signal.voting || {};
-
-  if (typeof voteSource === 'object' && !Array.isArray(voteSource)) {
-    bullishVotes = voteSource.bullish ?? voteSource.buy ?? voteSource.bullish_count ?? voteSource.bullish_votes ?? 0;
-    bearishVotes = voteSource.bearish ?? voteSource.sell ?? voteSource.bearish_count ?? voteSource.bearish_votes ?? 0;
-  }
-
-  if (bullishVotes === 0 && bearishVotes === 0) {
-    bullishVotes = signal.bullish_votes ?? signal.bullish_count ?? signal.bullish ?? signal.buy_votes ?? 
-                   signal.strategies_bullish ?? signal.bullish_strategies ?? signal.bull_count ?? 0;
-    bearishVotes = signal.bearish_votes ?? signal.bearish_count ?? signal.bearish ?? signal.sell_votes ?? 
-                   signal.strategies_bearish ?? signal.bearish_strategies ?? signal.bear_count ?? 0;
-  }
-
-  if (bullishVotes === 0 && bearishVotes === 0 && Array.isArray(signal.strategies)) {
-    bullishVotes = signal.strategies.filter(s => (s.action || s.type || s.vote || '').toLowerCase().includes('buy') || (s.action || s.type || s.vote || '').toLowerCase().includes('bull')).length;
-    bearishVotes = signal.strategies.filter(s => (s.action || s.type || s.vote || '').toLowerCase().includes('sell') || (s.action || s.type || s.vote || '').toLowerCase().includes('bear')).length;
-  }
-
-  // Fallback to realistic distribution if API provides 0/empty
-  if (bullishVotes === 0 && bearishVotes === 0) {
-    const score = parseInt(confidenceScore) || 80;
-    const totalVotes = 8;
-    const winningVotes = Math.max(5, Math.min(8, Math.round((score / 100) * totalVotes)));
-    const losingVotes = Math.max(1, totalVotes - winningVotes);
-
-    if (direction.includes('BUY')) {
-      bullishVotes = winningVotes;
-      bearishVotes = losingVotes;
-    } else {
-      bullishVotes = losingVotes;
-      bearishVotes = winningVotes;
-    }
-  }
-
-  let aiReasoning = '';
-  if (Array.isArray(signal.reasoning)) {
-    aiReasoning = signal.reasoning.map(r => `• ${r}`).join('\n');
-  } else if (typeof signal.reasoning === 'string' && signal.reasoning.trim().length > 0) {
-    aiReasoning = `• ${signal.reasoning}`;
-  } else {
-    aiReasoning = 
-      `• Momentum confirmation on ${symbol} from live market session\n` +
-      `• Market structure supports ${direction} with ${confidenceScore}% confidence\n` +
-      `• Risk-reward verified by AI system`;
-  }
-
-  const istCurrentTime = getIndianDateTime();
-
-  const message = 
-`🚨 <b>${CONFIG.BRAND_NAME.toUpperCase()} AI SIGNAL</b> 🚨
-
-🪙 <b>Asset:</b> <code>${symbol}</code> (${assetName})
-⏱ <b>Signal Time (IST):</b> <code>${signalTimeIST}</code>
-
-📊 <b>SIGNAL OVERVIEW</b>
-🎯 <b>Direction:</b> <b>${directionEmoji}</b>
-🔥 <b>Confidence:</b> <b>${confidenceScore}% (${confidenceLevel})</b>
-
-🎯 <b>PRICE LEVELS</b>
-▫️ <b>Entry Zone:</b> <code>${entryZone}</code>
-▫️ <b>Entry Mid:</b>  <code>${entryMid}</code>
-🛑 <b>Stop Loss:</b>  <code>${sl}</code>
-🎯 <b>TP1:</b>        <code>${tp1}</code>
-🎯 <b>TP2:</b>        <code>${tp2}</code>
-🎯 <b>TP3:</b>        <code>${tp3}</code>
-🎯 <b>TP4:</b>        <code>${tp4}</code>
-
-📊 <b>STRATEGY VOTES</b>
-🟢 <b>Bullish:</b> ${bullishVotes}  |  🔴 <b>Bearish:</b> ${bearishVotes}
-
-⚡ <b>AI REASONING</b>
-${aiReasoning}
-
-🇮🇳 <b>Alert Received (IST):</b> <code>${istCurrentTime}</code>
-👤 <b>Support:</b> ${CONFIG.ADMIN_HANDLE}`;
+  const message = buildSignalMessage(signal);
 
   for (const [chatId, userData] of Object.entries(db.users)) {
     if (!userData.isBanned && !db.bannedUsers.includes(chatId)) {
@@ -466,74 +505,34 @@ ${aiReasoning}
     }
   }
 
-  console.log(`[SENT] ${symbol} signal dispatched successfully at IST: ${istCurrentTime}`);
+  console.log(`[SENT] ${symbol} signal dispatched successfully at IST: ${getIndianDateTime()}`);
 }
 
-// ================= CONTROLLED POLLING =================
+// ================= LIVE POLLING CONTROLLER =================
 async function checkNewSignals(isRetry = false) {
   if (isChecking && !isRetry) return;
   isChecking = true;
 
   try {
-    if (!authHeaders['Authorization']) {
-      await login();
-    }
-
-    const res = await axios.get(CONFIG.ALERTS_URL, { 
-      headers: authHeaders,
-      timeout: 8000 
-    });
-
-    if (res.data?.status === 'unauthenticated' || res.data?.message?.toLowerCase().includes('unauthorized')) {
-      throw { response: { status: 401 } };
-    }
-
-    const signals = Array.isArray(res.data) 
-      ? res.data 
-      : (res.data.signals || res.data.data || res.data.history || []);
+    const signals = await fetchLatestSignals();
 
     if (!signals || !signals.length) {
       isChecking = false;
       return;
     }
 
-    // CASE 1: FIRST CONNECTION (Send 1 single latest signal, then confirm connection)
-    if (!db.connectionNotified) {
-      const topLatestSignal = signals[0];
-      const topSymbol = (topLatestSignal.symbol || topLatestSignal.pair || '').toUpperCase();
-      const topKey = String(topLatestSignal._id || topLatestSignal.id || `${topSymbol}_${topLatestSignal.created_at || topLatestSignal.entry_mid || topLatestSignal.entry_price || topLatestSignal.entry}`);
-
-      // 1. Send test signal
-      if (AVAILABLE_PAIRS.includes(topSymbol)) {
-        await broadcastTelegramAlert(topLatestSignal);
-        db.processedSignals[topKey] = true;
-      }
-
-      // 2. Lock ALL other existing signals in persistent database to prevent spam
+    // Baseline Lock on First Bot Run
+    if (Object.keys(db.processedSignals).length === 0) {
       for (const sig of signals) {
         const sKey = String(sig._id || sig.id || `${sig.symbol}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`);
         db.processedSignals[sKey] = true;
       }
-
-      // 3. Send Connection successfully established message
-      const istTime = getIndianDateTime();
-      const notifyText = 
-        `✅ <b>Connection successfully established!</b>\n\n` +
-        `🤖 <b>${CONFIG.BRAND_NAME}</b> AI Engine is active 24/7.\n` +
-        `📊 <b>Monitored Pairs:</b> <code>${AVAILABLE_PAIRS.join(', ')}</code>\n` +
-        `⏰ <b>Connected At (IST):</b> <code>${istTime}</code>`;
-
-      await bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText, { parse_mode: 'HTML' })
-        .then(() => console.log('[TG NOTIFIED] Admin notified of successful connection!'))
-        .catch(err => console.error('[TG NOTIFY ERROR]', err.message));
-
-      db.connectionNotified = true;
       saveDatabase();
       isChecking = false;
       return;
     }
 
-    // CASE 2: LIVE MONITORING (Only triggers for real new incoming signals)
+    // Only broadcast brand new live signals
     for (const sig of signals) {
       const sym = (sig.symbol || sig.pair || '').toUpperCase();
       if (!AVAILABLE_PAIRS.includes(sym)) continue;
