@@ -56,7 +56,7 @@ function saveDatabase() {
 
 loadDatabase();
 
-// Auto-register Admin Chat ID in DB with full pair access
+// Auto-register Admin with all pairs enabled by default
 const adminIdStr = String(CONFIG.ADMIN_CHAT_ID);
 if (!db.users[adminIdStr]) {
   db.users[adminIdStr] = {
@@ -77,7 +77,8 @@ const bot = new TelegramBot(CONFIG.TELEGRAM_BOT_TOKEN, {
 });
 
 let authHeaders = {};
-let lastProcessedSignalKey = null;
+// Track processed signals per-symbol so all pairs trigger independently
+let processedSignalKeys = {};
 let isChecking = false;
 let isLoggingIn = false;
 let isConnectionNotified = false;
@@ -112,7 +113,7 @@ bot.onText(/\/start/, (msg) => {
   if (db.bannedUsers.includes(chatId) || db.users[chatId]?.isBanned) {
     return bot.sendMessage(
       chatId, 
-      `🚫 Access Denied!\n\nAapko is bot se ban kiya gaya hai.\nSupport & Unban ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`
+      `🚫 Access Denied!\n\nAapko is bot se ban kiya gaya hai.\nSupport ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`
     );
   }
 
@@ -122,7 +123,7 @@ bot.onText(/\/start/, (msg) => {
     if (activeUserCount >= db.maxUsers && chatId !== String(CONFIG.ADMIN_CHAT_ID)) {
       return bot.sendMessage(
         chatId, 
-        `⚠️ Slot Full!\n\nBot me maximum user limit (${db.maxUsers}) reach ho chuki hai.\nNaye slots open hone par try karein ya Admin se access ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`
+        `⚠️ Slot Full!\n\nBot me maximum user limit (${db.maxUsers}) reach ho chuki hai.\nSupport ke liye contact karein: ${CONFIG.ADMIN_HANDLE}`
       );
     }
 
@@ -170,10 +171,17 @@ bot.on('callback_query', async (query) => {
       userPairs.push(pair);
     }
 
-    if (db.users[chatId]) {
+    if (!db.users[chatId]) {
+      db.users[chatId] = {
+        name: query.from.first_name || 'Trader',
+        pairs: userPairs,
+        isBanned: false,
+        joinedAt: getIndianDateTime()
+      };
+    } else {
       db.users[chatId].pairs = userPairs;
-      saveDatabase();
     }
+    saveDatabase();
 
     await bot.editMessageReplyMarkup(generatePairKeyboard(chatId), {
       chat_id: chatId,
@@ -316,7 +324,16 @@ async function login() {
 // ================= BROADCAST SIGNALS =================
 async function broadcastTelegramAlert(signal) {
   const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();
-  const assetName = signal.asset_name || signal.name || (symbol.includes('XAU') ? 'Gold' : symbol);
+  
+  let assetName = signal.asset_name || signal.name;
+  if (!assetName) {
+    if (symbol.includes('XAU')) assetName = 'Gold';
+    else if (symbol.includes('XAG')) assetName = 'Silver';
+    else if (symbol.includes('BTC')) assetName = 'Bitcoin';
+    else if (symbol.includes('ETH')) assetName = 'Ethereum';
+    else assetName = symbol;
+  }
+
   const signalTime = signal.created_at || signal.time || 'Live Signal';
 
   const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
@@ -324,13 +341,13 @@ async function broadcastTelegramAlert(signal) {
   const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';
   const confidenceLevel = signal.confidence_level || signal.level || 'Medium';
 
-  const entryZone = signal.entry_zone || `${signal.entry_low || signal.entry_price || '3,882'} – ${signal.entry_high || '3,882.6'}`;
-  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || signal.entry_price || '3,882.3';
-  const sl = signal.sl || signal.stop_loss || '3,892.3';
-  const tp1 = signal.tp1 || signal.tp || '3,872.3';
-  const tp2 = signal.tp2 || '3,857.3';
-  const tp3 = signal.tp3 || '3,837.3';
-  const tp4 = signal.tp4 || '3,812.3';
+  const entryZone = signal.entry_zone || `${signal.entry_low || signal.entry_price || ''} – ${signal.entry_high || ''}`;
+  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || signal.entry_price || '';
+  const sl = signal.sl || signal.stop_loss || '';
+  const tp1 = signal.tp1 || signal.tp || '';
+  const tp2 = signal.tp2 || '';
+  const tp3 = signal.tp3 || '';
+  const tp4 = signal.tp4 || '';
 
   const bullishVotes = signal.bullish_votes ?? signal.bullish ?? 1;
   const bearishVotes = signal.bearish_votes ?? signal.bearish ?? 5;
@@ -342,9 +359,9 @@ async function broadcastTelegramAlert(signal) {
     aiReasoning = `• ${signal.reasoning}`;
   } else {
     aiReasoning = 
-      `• Selling pressure detected on ${symbol} from live MT5 data during New York session\n` +
-      `• Market structure supports downside movement with ${confidenceScore}% confidence\n` +
-      `• Confirmed risk-reward ratio validated by AI system`;
+      `• Momentum confirmation on ${symbol} from live market session\n` +
+      `• Market structure supports ${direction} with ${confidenceScore}% confidence\n` +
+      `• Risk-reward verified by AI system`;
   }
 
   const istCurrentTime = getIndianDateTime();
@@ -392,7 +409,7 @@ ${aiReasoning}
   console.log(`[SENT] ${symbol} signal dispatched successfully at IST: ${istCurrentTime}`);
 }
 
-// ================= POLLING & AUTO-RECOVERY =================
+// ================= POLLING & MULTI-PAIR RECOVERY =================
 async function checkNewSignals(isRetry = false) {
   if (isChecking && !isRetry) return;
   isChecking = true;
@@ -420,46 +437,39 @@ async function checkNewSignals(isRetry = false) {
       return;
     }
 
-    const latest = signals[0];
-    const signalKey = latest._id || latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry_price || latest.entry}`;
+    // Process all pairs present in the incoming signals batch
+    for (const sig of signals) {
+      const sym = (sig.symbol || sig.pair || '').toUpperCase();
+      if (!AVAILABLE_PAIRS.includes(sym)) continue;
 
-    if (signalKey !== lastProcessedSignalKey) {
-      // 1. Connection notification if not sent yet
-      if (!isConnectionNotified) {
-        const istTime = getIndianDateTime();
-        const notifyText = 
-          `✅ <b>Connection successfully established!</b>\n\n` +
-          `🤖 <b>${CONFIG.BRAND_NAME}</b> AI Engine is active 24/7.\n` +
-          `📡 <b>API Data Source:</b> Connected\n` +
-          `🎯 <b>Baseline ID:</b> <code>${signalKey}</code>\n` +
-          `⏰ <b>Connected At (IST):</b> <code>${istTime}</code>`;
+      const sigKey = sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`;
 
-        const sendConnectionAlert = (retries = 3) => {
-          bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText, { parse_mode: 'HTML' })
-            .then(() => {
-              console.log('[TG NOTIFIED] Admin notified of successful connection!');
-              isConnectionNotified = true;
-            })
-            .catch(err => {
-              console.error(`[TG NOTIFY RETRYING] Remaining: ${retries - 1} | Error: ${err.message}`);
-              if (retries > 0) {
-                setTimeout(() => sendConnectionAlert(retries - 1), 3000);
-              }
-            });
-        };
-
-        sendConnectionAlert();
+      if (processedSignalKeys[sym] !== sigKey) {
+        processedSignalKeys[sym] = sigKey;
+        await broadcastTelegramAlert(sig);
+        console.log(`[SIGNAL PROCESSED] Dispatched ${sym} ID: ${sigKey}`);
       }
+    }
 
-      // 2. Dispatch latest signal immediately (baseline + live alerts)
-      await broadcastTelegramAlert(latest);
-      console.log(`[SIGNAL PROCESSED] Dispatched ID: ${signalKey}`);
+    // Trigger Connection Confirmation message AFTER initial signal broadcast
+    if (!isConnectionNotified) {
+      const istTime = getIndianDateTime();
+      const notifyText = 
+        `✅ <b>Connection successfully established!</b>\n\n` +
+        `🤖 <b>${CONFIG.BRAND_NAME}</b> AI Engine is active 24/7.\n` +
+        `📊 <b>Monitored Pairs:</b> <code>${AVAILABLE_PAIRS.join(', ')}</code>\n` +
+        `⏰ <b>Connected At (IST):</b> <code>${istTime}</code>`;
 
-      lastProcessedSignalKey = signalKey;
+      bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText, { parse_mode: 'HTML' })
+        .then(() => {
+          console.log('[TG NOTIFIED] Admin notified of successful connection!');
+          isConnectionNotified = true;
+        })
+        .catch(err => console.error('[TG NOTIFY ERROR]', err.message));
     }
   } catch (err) {
     const status = err.response?.status;
-    console.error(`[POLL ERROR] Status: ${status} | Target: ${CONFIG.ALERTS_URL}`);
+    console.error(`[POLL ERROR] Status: ${status}`);
     if (status === 401 || status === 403) {
       console.warn(`[DETECTED] Session logout (Status ${status}). Re-logging in...`);
       const success = await login();
