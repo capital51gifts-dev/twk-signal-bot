@@ -11,7 +11,7 @@ const CONFIG = {
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE',
   
   LOGIN_URL: process.env.LOGIN_URL || 'https://tws-forex-backend.vercel.app/api/login',
-  ALERTS_URL: process.env.ALERTS_URL || 'https://ai-bot.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
+  ALERTS_URL: process.env.ALERTS_URL || 'https://ai-v2.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
   API_KEY: '90104689',
   
   CREDENTIALS: {
@@ -263,7 +263,7 @@ async function login() {
     const res = await axios.post(CONFIG.LOGIN_URL, CONFIG.CREDENTIALS, {
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1'
       },
       timeout: 10000
     });
@@ -271,10 +271,14 @@ async function login() {
     const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
 
     authHeaders = {
-      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)',
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/18.5 Mobile/15E148 Safari/604.1',
       'Accept': 'application/json, text/plain, */*',
+      'Accept-Language': 'en-US,en;q=0.9',
       'Origin': 'https://automate.tradewithsanchit.com',
       'Referer': 'https://automate.tradewithsanchit.com/',
+      'Sec-Fetch-Dest': 'empty',
+      'Sec-Fetch-Mode': 'cors',
+      'Sec-Fetch-Site': 'same-site',
       'X-Api-Key': CONFIG.API_KEY,
       ...(token && { 'Authorization': `Bearer ${token}` })
     };
@@ -292,7 +296,7 @@ async function login() {
 // ================= BROADCAST SIGNALS =================
 async function broadcastTelegramAlert(signal) {
   const symbol = (signal.symbol || signal.pair || 'XAUUSD').toUpperCase();
-  const assetName = signal.asset_name || signal.name || 'Gold';
+  const assetName = signal.asset_name || signal.name || (symbol.includes('XAU') ? 'Gold' : symbol);
   const signalTime = signal.created_at || signal.time || 'Live Signal';
 
   const direction = (signal.direction || signal.type || signal.action || 'SELL').toUpperCase();
@@ -397,7 +401,7 @@ async function checkNewSignals(isRetry = false) {
     }
 
     const latest = signals[0];
-    const signalKey = latest._id || latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry}`;
+    const signalKey = latest._id || latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry_price || latest.entry}`;
 
     if (signalKey !== lastProcessedSignalKey) {
       if (lastProcessedSignalKey !== null) {
