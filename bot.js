@@ -62,6 +62,7 @@ let authHeaders = {};
 let lastProcessedSignalKey = null;
 let isChecking = false;
 let isLoggingIn = false;
+let isConnectionNotified = false;
 
 function getIndianDateTime() {
   return new Intl.DateTimeFormat('en-IN', {
@@ -414,6 +415,21 @@ async function checkNewSignals(isRetry = false) {
         await broadcastTelegramAlert(latest);
       } else {
         console.log(`[INITIALIZED] Baseline active: ${signalKey}`);
+        
+        // Connection successfully established alert to Admin
+        if (!isConnectionNotified) {
+          const istTime = getIndianDateTime();
+          bot.sendMessage(
+            CONFIG.ADMIN_CHAT_ID,
+            `✅ *Connection successfully established!*\n\n` +
+            `🤖 *${CONFIG.BRAND_NAME}* AI Engine is active 24/7.\n` +
+            `📡 API Data Source: \`${CONFIG.ALERTS_URL}\`\n` +
+            `🎯 Baseline ID: \`${signalKey}\`\n` +
+            `⏰ Connected At (IST): \`${istTime}\``,
+            { parse_mode: 'Markdown' }
+          ).catch(e => console.error('[TG NOTIFY ERROR]', e.message));
+          isConnectionNotified = true;
+        }
       }
       lastProcessedSignalKey = signalKey;
     }
