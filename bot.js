@@ -2,6 +2,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const axios = require('axios');
 const fs = require('fs');
 const path = require('path');
+const http = require('http');
 
 // ================= CONFIGURATION =================
 const CONFIG = {
@@ -12,7 +13,7 @@ const CONFIG = {
   
   LOGIN_URL: 'https://tws-forex-backend.vercel.app/api/login',
   ALERTS_URL: 'https://ai-bot.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
-  API_KEY: '99104689', // Exact API Key from your browser cURL
+  API_KEY: '99104689',
   
   CREDENTIALS: {
     email: process.env.SANCHIT_EMAIL || 'capital51gifts@gmail.com',
@@ -270,7 +271,6 @@ async function login() {
 
     const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
 
-    // Exact headers verified from browser cURL
     authHeaders = {
       'Accept': 'application/json, text/plain, */*',
       'Accept-Language': 'en-US,en;q=0.9',
@@ -442,3 +442,12 @@ async function main() {
 }
 
 main();
+
+// ================= RENDER WEB SERVICE HEALTH CHECK =================
+const PORT = process.env.PORT || 3000;
+http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Trade With Krishna Bot is running 24/7!\n');
+}).listen(PORT, () => {
+  console.log(`[SERVER] Health check listening on port ${PORT}`);
+});
