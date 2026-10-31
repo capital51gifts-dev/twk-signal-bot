@@ -10,12 +10,13 @@ const CONFIG = {
   ADMIN_CHAT_ID: 6224393090,
   TELEGRAM_BOT_TOKEN: process.env.TELEGRAM_BOT_TOKEN || 'YOUR_BOT_TOKEN_HERE',
   
-  LOGIN_URL: process.env.LOGIN_URL || 'https://automate.tradewithsanchit.com/api/login',
-  ALERTS_URL: process.env.ALERTS_URL || 'https://automate.tradewithsanchit.com/api/signals',
+  LOGIN_URL: process.env.LOGIN_URL || 'https://tws-forex-backend.vercel.app/api/login',
+  ALERTS_URL: process.env.ALERTS_URL || 'https://ai-bot.tradewithsanchit.com/api/signals/history?limit=8&offset=0',
+  API_KEY: '90104689',
   
   CREDENTIALS: {
-    email: process.env.SANCHIT_EMAIL || 'your_email@example.com',
-    password: process.env.SANCHIT_PASSWORD || 'your_password'
+    email: process.env.SANCHIT_EMAIL || 'capital51gifts@gmail.com',
+    password: process.env.SANCHIT_PASSWORD || 'Sanjay@999'
   },
   
   POLL_INTERVAL_MS: 5000,
@@ -262,18 +263,20 @@ async function login() {
     const res = await axios.post(CONFIG.LOGIN_URL, CONFIG.CREDENTIALS, {
       headers: {
         'Content-Type': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+        'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)'
       },
       timeout: 10000
     });
 
     const token = res.data?.token || res.data?.access_token || res.data?.data?.token;
-    const cookies = res.headers['set-cookie']?.map(c => c.split(';')[0]).join('; ');
 
     authHeaders = {
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)',
-      ...(token && { 'Authorization': `Bearer ${token}` }),
-      ...(cookies && { 'Cookie': cookies })
+      'User-Agent': 'Mozilla/5.0 (iPhone; CPU iPhone OS 18_5 like Mac OS X)',
+      'Accept': 'application/json, text/plain, */*',
+      'Origin': 'https://automate.tradewithsanchit.com',
+      'Referer': 'https://automate.tradewithsanchit.com/',
+      'X-Api-Key': CONFIG.API_KEY,
+      ...(token && { 'Authorization': `Bearer ${token}` })
     };
 
     console.log(`[AUTH] Session renewed! (${getIndianDateTime()})`);
@@ -297,8 +300,8 @@ async function broadcastTelegramAlert(signal) {
   const confidenceScore = signal.confidence_score || signal.confidence || signal.score || '80';
   const confidenceLevel = signal.confidence_level || signal.level || 'Medium';
 
-  const entryZone = signal.entry_zone || `${signal.entry_low || '3,882'} – ${signal.entry_high || '3,882.6'}`;
-  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || '3,882.3';
+  const entryZone = signal.entry_zone || `${signal.entry_low || signal.entry_price || '3,882'} – ${signal.entry_high || '3,882.6'}`;
+  const entryMid = signal.entry_mid || signal.entryMid || signal.entry || signal.entry_price || '3,882.3';
   const sl = signal.sl || signal.stop_loss || '3,892.3';
   const tp1 = signal.tp1 || signal.tp || '3,872.3';
   const tp2 = signal.tp2 || '3,857.3';
@@ -311,11 +314,13 @@ async function broadcastTelegramAlert(signal) {
   let aiReasoning = '';
   if (Array.isArray(signal.reasoning)) {
     aiReasoning = signal.reasoning.map(r => `✅ ${r}`).join('\n');
+  } else if (typeof signal.reasoning === 'string' && signal.reasoning.trim().length > 0) {
+    aiReasoning = `✅ ${signal.reasoning}`;
   } else {
     aiReasoning = 
       `✅ Selling pressure detected on ${symbol} from live MT5 data during New York session\n` +
-      `✅ Market structure supports downside movement with 80% confidence\n` +
-      `✅ 5/12 strategies confirmed - risk-reward ratio validated by AI system`;
+      `✅ Market structure supports downside movement with ${confidenceScore}% confidence\n` +
+      `✅ Confirmed risk-reward ratio validated by AI system`;
   }
 
   const istCurrentTime = getIndianDateTime();
@@ -369,7 +374,7 @@ async function checkNewSignals(isRetry = false) {
   isChecking = true;
 
   try {
-    if (!authHeaders['Authorization'] && !authHeaders['Cookie']) {
+    if (!authHeaders['Authorization']) {
       await login();
     }
 
@@ -382,14 +387,17 @@ async function checkNewSignals(isRetry = false) {
       throw { response: { status: 401 } };
     }
 
-    const signals = Array.isArray(res.data) ? res.data : (res.data.data || res.data.signals || []);
+    const signals = Array.isArray(res.data) 
+      ? res.data 
+      : (res.data.signals || res.data.data || res.data.history || []);
+
     if (!signals.length) {
       isChecking = false;
       return;
     }
 
     const latest = signals[0];
-    const signalKey = latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry}`;
+    const signalKey = latest._id || latest.id || `${latest.symbol}_${latest.created_at || latest.entry_mid || latest.entry}`;
 
     if (signalKey !== lastProcessedSignalKey) {
       if (lastProcessedSignalKey !== null) {
@@ -402,7 +410,7 @@ async function checkNewSignals(isRetry = false) {
   } catch (err) {
     const status = err.response?.status;
     if (status === 401 || status === 403) {
-      console.warn(`[DETECTED] Session logout detect hua (${status})! Re-login chalu...`);
+      console.warn(`[DETECTED] Session logout (Status ${status}). Re-logging in...`);
       const success = await login();
       if (success && !isRetry) {
         isChecking = false;
