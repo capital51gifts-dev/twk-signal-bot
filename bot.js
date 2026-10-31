@@ -56,7 +56,7 @@ function saveDatabase() {
 
 loadDatabase();
 
-// Ensure Admin Chat ID is automatically registered in DB with all pairs enabled
+// Auto-register Admin Chat ID in DB with full pair access
 const adminIdStr = String(CONFIG.ADMIN_CHAT_ID);
 if (!db.users[adminIdStr]) {
   db.users[adminIdStr] = {
@@ -140,14 +140,12 @@ bot.onText(/\/start/, (msg) => {
   }
 
   const welcomeText = 
-`👋 Welcome ${userName}!
-
-*${CONFIG.BRAND_NAME}* AI Signal Bot me aapka swagat hai.
-
-Neeche diye gaye buttons par tap karke select karein ki aapko kin-kin pairs ke alerts chahiye:`;
+`👋 <b>Welcome ${userName}!</b>\n\n` +
+`<b>${CONFIG.BRAND_NAME}</b> AI Signal Bot me aapka swagat hai.\n\n` +
+`Neeche diye gaye buttons par tap karke select karein ki aapko kin-kin pairs ke alerts chahiye:`;
 
   bot.sendMessage(chatId, welcomeText, {
-    parse_mode: 'Markdown',
+    parse_mode: 'HTML',
     reply_markup: generatePairKeyboard(chatId)
   }).catch(err => console.error('[WELCOME ERROR]', err.message));
 });
@@ -198,17 +196,17 @@ bot.onText(/\/stats/, (msg) => {
   const active = total - banned;
 
   bot.sendMessage(chatId, 
-    `📊 *${CONFIG.BRAND_NAME} Control Panel*\n\n` +
-    `👥 Max Allowed Users: *${db.maxUsers}*\n` +
-    `✅ Active Users: *${active}*\n` +
-    `🚫 Banned Users: *${banned}*\n` +
-    `📁 Total Enrolled: *${total}*\n\n` +
-    `*Admin Controls:*\n` +
-    `• \`/setlimit <number>\`\n` +
-    `• \`/ban <chat_id>\`\n` +
-    `• \`/unban <chat_id>\`\n` +
-    `• \`/users\``,
-    { parse_mode: 'Markdown' }
+    `📊 <b>${CONFIG.BRAND_NAME} Control Panel</b>\n\n` +
+    `👥 Max Allowed Users: <b>${db.maxUsers}</b>\n` +
+    `✅ Active Users: <b>${active}</b>\n` +
+    `🚫 Banned Users: <b>${banned}</b>\n` +
+    `📁 Total Enrolled: <b>${total}</b>\n\n` +
+    `<b>Admin Controls:</b>\n` +
+    `• <code>/setlimit &lt;number&gt;</code>\n` +
+    `• <code>/ban &lt;chat_id&gt;</code>\n` +
+    `• <code>/unban &lt;chat_id&gt;</code>\n` +
+    `• <code>/users</code>`,
+    { parse_mode: 'HTML' }
   ).catch(e => console.error('[STATS ERROR]', e.message));
 });
 
@@ -218,12 +216,12 @@ bot.onText(/\/setlimit (.+)/, (msg, match) => {
 
   const newLimit = parseInt(match[1]);
   if (isNaN(newLimit) || newLimit <= 0) {
-    return bot.sendMessage(chatId, '❌ Valid number daalein. Example: `/setlimit 50`', { parse_mode: 'Markdown' });
+    return bot.sendMessage(chatId, '❌ Valid number daalein. Example: <code>/setlimit 50</code>', { parse_mode: 'HTML' });
   }
 
   db.maxUsers = newLimit;
   saveDatabase();
-  bot.sendMessage(chatId, `✅ Max User Limit set to: *${newLimit}*`, { parse_mode: 'Markdown' });
+  bot.sendMessage(chatId, `✅ Max User Limit set to: <b>${newLimit}</b>`, { parse_mode: 'HTML' });
 });
 
 bot.onText(/\/ban (.+)/, (msg, match) => {
@@ -239,7 +237,7 @@ bot.onText(/\/ban (.+)/, (msg, match) => {
   }
   saveDatabase();
 
-  bot.sendMessage(chatId, `🚫 User \`${targetId}\` ko ban kar diya gaya hai.`, { parse_mode: 'Markdown' });
+  bot.sendMessage(chatId, `🚫 User <code>${targetId}</code> ko ban kar diya gaya hai.`, { parse_mode: 'HTML' });
   bot.sendMessage(targetId, `🚫 Notification: Aapko ban kiya gaya hai. Contact: ${CONFIG.ADMIN_HANDLE}`).catch(() => {});
 });
 
@@ -254,7 +252,7 @@ bot.onText(/\/unban (.+)/, (msg, match) => {
   }
   saveDatabase();
 
-  bot.sendMessage(chatId, `✅ User \`${targetId}\` unban ho gaya hai.`, { parse_mode: 'Markdown' });
+  bot.sendMessage(chatId, `✅ User <code>${targetId}</code> unban ho gaya hai.`, { parse_mode: 'HTML' });
   bot.sendMessage(targetId, `✅ Notification: Aapka access activate ho gaya hai. Dobara /start karein.`).catch(() => {});
 });
 
@@ -339,51 +337,51 @@ async function broadcastTelegramAlert(signal) {
 
   let aiReasoning = '';
   if (Array.isArray(signal.reasoning)) {
-    aiReasoning = signal.reasoning.map(r => `✅ ${r}`).join('\n');
+    aiReasoning = signal.reasoning.map(r => `• ${r}`).join('\n');
   } else if (typeof signal.reasoning === 'string' && signal.reasoning.trim().length > 0) {
-    aiReasoning = `✅ ${signal.reasoning}`;
+    aiReasoning = `• ${signal.reasoning}`;
   } else {
     aiReasoning = 
-      `✅ Selling pressure detected on ${symbol} from live MT5 data during New York session\n` +
-      `✅ Market structure supports downside movement with ${confidenceScore}% confidence\n` +
-      `✅ Confirmed risk-reward ratio validated by AI system`;
+      `• Selling pressure detected on ${symbol} from live MT5 data during New York session\n` +
+      `• Market structure supports downside movement with ${confidenceScore}% confidence\n` +
+      `• Confirmed risk-reward ratio validated by AI system`;
   }
 
   const istCurrentTime = getIndianDateTime();
 
   const message = 
-`🚨 *${CONFIG.BRAND_NAME.toUpperCase()} AI SIGNAL* 🚨
+`🚨 <b>${CONFIG.BRAND_NAME.toUpperCase()} AI SIGNAL</b> 🚨
 
-🪙 *Asset:* \`${symbol}\` (${assetName})
-⏱ *Signal Time:* \`${signalTime}\`
+🪙 <b>Asset:</b> <code>${symbol}</code> (${assetName})
+⏱ <b>Signal Time:</b> <code>${signalTime}</code>
 
-📊 *SIGNAL OVERVIEW*
-🎯 *Direction:* *${directionEmoji}*
-🔥 *Confidence:* *${confidenceScore}% (${confidenceLevel})*
+📊 <b>SIGNAL OVERVIEW</b>
+🎯 <b>Direction:</b> <b>${directionEmoji}</b>
+🔥 <b>Confidence:</b> <b>${confidenceScore}% (${confidenceLevel})</b>
 
-🎯 *PRICE LEVELS*
-▫️ *Entry Zone:* \`${entryZone}\`
-▫️ *Entry Mid:*  \`${entryMid}\`
-🛑 *Stop Loss:*  \`${sl}\`
-🎯 *TP1:*        \`${tp1}\`
-🎯 *TP2:*        \`${tp2}\`
-🎯 *TP3:*        \`${tp3}\`
-🎯 *TP4:*        \`${tp4}\`
+🎯 <b>PRICE LEVELS</b>
+▫️ <b>Entry Zone:</b> <code>${entryZone}</code>
+▫️ <b>Entry Mid:</b>  <code>${entryMid}</code>
+🛑 <b>Stop Loss:</b>  <code>${sl}</code>
+🎯 <b>TP1:</b>        <code>${tp1}</code>
+🎯 <b>TP2:</b>        <code>${tp2}</code>
+🎯 <b>TP3:</b>        <code>${tp3}</code>
+🎯 <b>TP4:</b>        <code>${tp4}</code>
 
-📊 *STRATEGY VOTES*
-🟢 *Bullish:* ${bullishVotes}  |  🔴 *Bearish:* ${bearishVotes}
+📊 <b>STRATEGY VOTES</b>
+🟢 <b>Bullish:</b> ${bullishVotes}  |  🔴 <b>Bearish:</b> ${bearishVotes}
 
-⚡ *AI REASONING*
+⚡ <b>AI REASONING</b>
 ${aiReasoning}
 
-🇮🇳 *Alert Received (IST):* \`${istCurrentTime}\`
-👤 *Support:* ${CONFIG.ADMIN_HANDLE}`;
+🇮🇳 <b>Alert Received (IST):</b> <code>${istCurrentTime}</code>
+👤 <b>Support:</b> ${CONFIG.ADMIN_HANDLE}`;
 
   for (const [chatId, userData] of Object.entries(db.users)) {
     if (!userData.isBanned && !db.bannedUsers.includes(chatId)) {
       if (userData.pairs && userData.pairs.includes(symbol)) {
         try {
-          await bot.sendMessage(chatId, message, { parse_mode: 'Markdown' });
+          await bot.sendMessage(chatId, message, { parse_mode: 'HTML' });
         } catch (err) {
           console.error(`[SEND FAILED] ChatId ${chatId}:`, err.message);
         }
@@ -391,7 +389,7 @@ ${aiReasoning}
     }
   }
 
-  console.log(`[SENT] ${symbol} signal dispatched at IST: ${istCurrentTime}`);
+  console.log(`[SENT] ${symbol} signal dispatched successfully at IST: ${istCurrentTime}`);
 }
 
 // ================= POLLING & AUTO-RECOVERY =================
@@ -430,14 +428,14 @@ async function checkNewSignals(isRetry = false) {
       if (!isConnectionNotified) {
         const istTime = getIndianDateTime();
         const notifyText = 
-          `✅ Connection successfully established!\n\n` +
-          `🤖 ${CONFIG.BRAND_NAME} AI Engine is active 24/7.\n` +
-          `📡 API Data Source: Connected\n` +
-          `🎯 Baseline ID: ${signalKey}\n` +
-          `⏰ Connected At (IST): ${istTime}`;
+          `✅ <b>Connection successfully established!</b>\n\n` +
+          `🤖 <b>${CONFIG.BRAND_NAME}</b> AI Engine is active 24/7.\n` +
+          `📡 <b>API Data Source:</b> Connected\n` +
+          `🎯 <b>Baseline ID:</b> <code>${signalKey}</code>\n` +
+          `⏰ <b>Connected At (IST):</b> <code>${istTime}</code>`;
 
         const sendConnectionAlert = (retries = 3) => {
-          bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText)
+          bot.sendMessage(CONFIG.ADMIN_CHAT_ID, notifyText, { parse_mode: 'HTML' })
             .then(() => {
               console.log('[TG NOTIFIED] Admin notified of successful connection!');
               isConnectionNotified = true;
@@ -453,7 +451,7 @@ async function checkNewSignals(isRetry = false) {
         sendConnectionAlert();
       }
 
-      // 2. Dispatch latest signal immediately (both for baseline and new incoming signals)
+      // 2. Dispatch latest signal immediately (baseline + live alerts)
       await broadcastTelegramAlert(latest);
       console.log(`[SIGNAL PROCESSED] Dispatched ID: ${signalKey}`);
 
