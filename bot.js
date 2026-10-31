@@ -32,7 +32,7 @@ let db = {
   maxUsers: 50,
   users: {},
   bannedUsers: [],
-  processedSignals: {}, // Saved persistently to disk
+  processedSignals: {},
   connectionNotified: false
 };
 
@@ -60,7 +60,7 @@ function saveDatabase() {
 
 loadDatabase();
 
-// Ensure Admin is always enrolled
+// Admin auto-enrolled with all pairs
 const adminIdStr = String(CONFIG.ADMIN_CHAT_ID);
 if (!db.users[adminIdStr]) {
   db.users[adminIdStr] = {
@@ -373,8 +373,20 @@ async function broadcastTelegramAlert(signal) {
   const tp3 = signal.tp3 || '';
   const tp4 = signal.tp4 || '';
 
-  const bullishVotes = signal.bullish_votes ?? signal.bullish ?? 1;
-  const bearishVotes = signal.bearish_votes ?? signal.bearish ?? 5;
+  // Dynamic Strategy Votes Extraction (Checks all known API response structures)
+  let bullishVotes = 0;
+  let bearishVotes = 0;
+
+  if (signal.strategy_votes && typeof signal.strategy_votes === 'object') {
+    bullishVotes = signal.strategy_votes.bullish ?? signal.strategy_votes.buy ?? 0;
+    bearishVotes = signal.strategy_votes.bearish ?? signal.strategy_votes.sell ?? 0;
+  } else if (signal.votes && typeof signal.votes === 'object') {
+    bullishVotes = signal.votes.bullish ?? signal.votes.buy ?? 0;
+    bearishVotes = signal.votes.bearish ?? signal.votes.sell ?? 0;
+  } else {
+    bullishVotes = signal.bullish_votes ?? signal.bullish_count ?? signal.bullish ?? signal.buy_votes ?? 0;
+    bearishVotes = signal.bearish_votes ?? signal.bearish_count ?? signal.bearish ?? signal.sell_votes ?? 0;
+  }
 
   let aiReasoning = '';
   if (Array.isArray(signal.reasoning)) {
@@ -461,7 +473,7 @@ async function checkNewSignals(isRetry = false) {
       return;
     }
 
-    // CASE 1: FIRST CONNECTION (Send exactly ONE single latest signal, then confirm connection)
+    // CASE 1: FIRST CONNECTION (Send 1 single latest signal, then confirm connection)
     if (!db.connectionNotified) {
       const topLatestSignal = signals[0];
       const topSymbol = (topLatestSignal.symbol || topLatestSignal.pair || '').toUpperCase();
@@ -473,7 +485,7 @@ async function checkNewSignals(isRetry = false) {
         db.processedSignals[topKey] = true;
       }
 
-      // 2. Lock ALL other existing signals in database so they NEVER spam
+      // 2. Lock ALL other existing signals in persistent database to prevent spam
       for (const sig of signals) {
         const sKey = String(sig._id || sig.id || `${sig.symbol}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`);
         db.processedSignals[sKey] = true;
@@ -497,14 +509,13 @@ async function checkNewSignals(isRetry = false) {
       return;
     }
 
-    // CASE 2: LIVE MONITORING (Only triggers when a genuine brand-new signal arrives)
+    // CASE 2: LIVE MONITORING (Only triggers for real new incoming signals)
     for (const sig of signals) {
       const sym = (sig.symbol || sig.pair || '').toUpperCase();
       if (!AVAILABLE_PAIRS.includes(sym)) continue;
 
       const sigKey = String(sig._id || sig.id || `${sym}_${sig.created_at || sig.entry_mid || sig.entry_price || sig.entry}`);
 
-      // Agar yeh signal pehle kabhi nahi gaya, sirf tabhi send hoga
       if (!db.processedSignals[sigKey]) {
         db.processedSignals[sigKey] = true;
         saveDatabase();
